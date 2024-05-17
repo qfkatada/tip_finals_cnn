@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-@st.cache_data #(allow_output_mutation=True)
+# @st.cache_data #(allow_output_mutation=True)
 def load_pandas():
     weather_details_flights_airport_codes = pd.read_csv(f"./datasets/weather_details_flights_airport_codes.csv", index_col="Unnamed: 0")
     weather_details_flights_airport_codes.rename(columns={
@@ -22,8 +22,15 @@ def load_pandas():
     
     return weather_details_flights_airport_codes[new_forcasted_flight + ['total travel delay']]
 
-def load_model():
+@st.cache_data
+def scale(inputs: pd.DataFrame, labels: pd.DataFrame):
     pass
+
+@st.cache
+def load_model():
+    model = load_model('./finals_streamlit/models/cnn_regression_base_lr0_0001epoch50drop02-F183')
+    print(f"[+] {model.summary()}")
+    return model
 
 df: pd.DataFrame = load_pandas()
 st.markdown("# TIP Finals: Model Deployment")
@@ -35,7 +42,7 @@ st.write("""
 )
 st.divider()
 st.write("""
-    ## Parameters
+    ## Travel Plan
     """     
 )
 
@@ -43,62 +50,160 @@ st.write("""
 
 # Checkbox
 if st.checkbox('Show dataframe'):
-    st.dataframe(df)
-    st.button("Rerun")
+    st.dataframe(df[['total travel delay', 'origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
+                   'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
+                   'name', 'carrier', 'flight','airport','municipality', 'elevation']])
+
+st.write("""
+    ### Primary Details
+    """     
+)
+
+# Month Day Year
+departure_date = st.date_input(label="Departure Date",
+                               help="Date of Departure"
+                               )
+
+# scheduled departure time
+scheduled_departure_time = st.time_input( label="Scheduled Departure Time", help="Flight Scheduled Departure Time")
+
+# departure time
+departure_time = st.time_input(label="Time Departed", help="Actual time the plane departed")
+
+# departure_delay = scheduled_departure_time - departure_time
+
+# distance = origin + distination
 
 # Dropdown
-option = st.selectbox(
+origin = st.selectbox(
     key=1,
-    label='Origin Airport',
-    options=df['origin'].unique())
+    label='Airport Origin',
+    options=df['origin'].unique(),
+    )
 
-'You selected: ', option
+'Airport Origin: ', origin
 
-# Add a selectbox to the sidebar:
-# add_side_selectbox = st.sidebar.selectbox(
-#     'How would you like to be contacted?',
-#     ('Email', 'Home phone', 'Mobile phone')
-# )
-
-add_selectbox = st.selectbox(
+# Dropdown
+airlines = st.selectbox(
     key=2,
-    label='How would you like to be contacted?',
-    options=('Email', 'Home phone', 'Mobile phone')
+    label='Airlines',
+    options=df['name'].unique(),
+    )
+
+'Airlines: ', airlines
+
+carrier = st.selectbox(
+    key=3,
+    label='Carrier Type',
+    options=df['carrier'].unique(),
+    )
+
+'Carrier Type: ', airlines
+
+# Dropdown
+flight = st.selectbox(
+        key=4,
+        label='Airport Destination',
+        options=df['flight'].unique(),
+    )
+
+'Flight: ', flight
+
+st.write("""
+    ### Destination
+    """     
 )
 
-# Add a slider to the sidebar:
-# add_side_slider = st.sidebar.slider(
-#     key=3,
-#     label='Select a range of values',
-#     min_value=0.00, max_value=100.00, value=25.0
-# )
+# Dropdown
+destination = st.selectbox(
+        key=5,
+        label='Airport Destination',
+        options=df['destination'].unique(),
+    )
 
-# Add a slider to the sidebar:
-add_slider = st.slider(
-    key=4,
-    label='Select a range of values',
-    min_value=0.00, max_value=100.00, value=25.0
+# Automap airport_destination, municipality, elavation
+#
+# airport_destination = st.selectbox(
+#         key=3,
+#         label='Airport Destination',
+#         options=df['airport'].unique(),
+#     )
+
+# 
+
+# scheduled departure time
+scheduled_arrival_time = st.time_input(label="Arrival Time", help="The Scheduled Arrival time for the destination or connecting Airport")
+
+# Default Values
+described_values = df[['humidity','pressure', 'temperature', 'wind direction', 'wind speed', 'distance', 'eta duration']].describe()
+
+eta_duration = st.number_input(
+    label="Estimated Flight Dration", 
+    min_value=described_values.loc['min','eta duration'], 
+    help="ETA Flight Duration from the ticket")
+
+st.write("""
+    ## Weather Forecast
+    """     
 )
 
-left_column, right_column = st.columns(2)
-left_column.button('Press me!')
+humidity = st.slider(
+    key=6,
+    label='Humidity',
+    min_value=(described_values.loc['min', 'pressure'] - described_values.loc['std', 'pressure']), 
+    max_value=(described_values.loc['max', 'pressure'] + described_values.loc['std', 'pressure']), 
+    value=described_values.loc['mean', 'pressure']
+)
 
-# Or even better, call Streamlit functions inside a "with" block:
-with right_column:
-    chosen = st.radio(
-        'Sorting hat',
-        ("Gryffindor", "Ravenclaw", "Hufflepuff", "Slytherin"))
-    st.write(f"You are in {chosen} house!")
+pressure = st.slider(
+    key=7,
+    label='Pressure',
+    min_value=(described_values.loc['min', 'pressure'] - described_values.loc['std', 'pressure']), 
+    max_value=(described_values.loc['max', 'pressure'] + described_values.loc['std', 'pressure']), 
+    value=described_values.loc['mean', 'pressure']
+)
 
+temperature = st.slider(
+    key=8,
+    label='Temperature',
+    min_value=(described_values.loc['min', 'temperature'] - described_values.loc['std', 'temperature']), 
+    max_value=(described_values.loc['max', 'temperature'] + described_values.loc['std', 'temperature']), 
+    value=described_values.loc['mean', 'temperature']
+)
 
-# State Plots
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(np.random.randn(20, 2), columns=["x", "y"])
+wind_direction = st.slider(
+    key=9,
+    label='Wind Direction',
+    min_value=(described_values.loc['min', 'wind direction'] - described_values.loc['std', 'wind direction']), 
+    max_value=(described_values.loc['max', 'wind direction'] + described_values.loc['std', 'wind direction']), 
+    value=described_values.loc['mean', 'wind direction']
+)
 
-st.header("Choose a datapoint color")
-color = st.color_picker("Color", "#FF0000")
-st.divider()
-st.scatter_chart(st.session_state.df, x="x", y="y", color=color)
+wind_speed = st.slider(
+    key=10,
+    label='Wind Speed',
+    min_value=(described_values.loc['min', 'wind speed'] - described_values.loc['std', 'wind speed']), 
+    max_value=(described_values.loc['max', 'wind speed'] + described_values.loc['std', 'wind speed']), 
+    value=described_values.loc['mean', 'wind speed']
+)
+
+weather_description = st.selectbox(
+        key=11,
+        label='Weather Description',
+        options=df['weather description'].unique(),
+        index=10
+    )
+
+st.write("""
+    ## Possibility of missing a connecting flight due to arrival delay
+    """     
+)
+
+predict = st.button("Predict", type="primary")
+print(predict)
+# if st.button("Predict"):
+#     # Test Predict
+#     pass
 
 st.divider()
 st.write("""
