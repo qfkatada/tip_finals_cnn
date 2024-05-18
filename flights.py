@@ -128,7 +128,7 @@ payload['scheduled departure time'] = int((scheduled_departure_time.hour*100) + 
 departure_time = st.time_input(
     label="Time Departed", 
     help="Actual time the plane departed",
-    value=payload['scheduled departure time'] 
+    value=scheduled_departure_time
     )
 payload['departure time'] = int((departure_time.hour*100) + (departure_time.minute *10))
 payload['departure delay'] = payload['departure time'] - payload['scheduled departure time']
