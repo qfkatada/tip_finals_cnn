@@ -7,10 +7,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-
-inputs_scaler = StandardScaler()
-label_scaler = StandardScaler()
-label = LabelEncoder()
+from tensorflow.keras.models import Model, load_model
+import tensorflow as tf
 
 # @st.cache_data #(allow_output_mutation=True)
 def load_pandas():
@@ -32,48 +30,17 @@ def load_pandas():
     
     return weather_details_flights_airport_codes[new_forcasted_flight + ['total travel delay']]
 
-# @st.cache_data
-def encode_transform(inputs: dict):
-    # From Notebook label transformer mapping
-    with open('./datasets/label_encoded.json', 'r') as json_file:
-        # label_encoded
-        mapping = json.load(json_file)
-        # print(mapping)
-
-    encoded_map = mapping
-    for key, transform_mapping in encoded_map.items():
-        encoded_map[key] = { val:int(k) for k, val in transform_mapping.items()}
-
-    # encoded to label
-    for key, val in inputs.items():
-        if key in encoded_map.keys():
-            inputs[key] = encoded_map[key][str(val)]
-
-    inputs = pd.DataFrame([inputs])[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
-                   'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
-                   'name', 'carrier', 'flight','airport','municipality', 'elevation']]
-
-    df[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
-                   'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
-                   'name', 'carrier', 'flight','airport','municipality', 'elevation']]
-    
-    scaled_columns = list([ f"scl_{str(col)}" for col in inputs.columns])
-    _inputs_reg_av_ds_scaled = inputs_scaler.fit_transform(inputs)
-    inputs = pd.DataFrame(_inputs_reg_av_ds_scaled, columns=scaled_columns)
-
-    return inputs, mapping
-
 @st.cache_data
 def encode_transform_scale(curr_df:pd.DataFrame, inputs: pd.DataFrame):
     mapping = dict()
+    inputs_scaler = StandardScaler()
+    label_scaler = StandardScaler()
+    label = LabelEncoder()
 
     # insert user input to end of all inputs
     curr_df = pd.concat([curr_df[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
                 'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
                 'name', 'carrier', 'flight','airport','municipality', 'elevation', 'total travel delay']], inputs])
-    
-    print("Original", "="* 50 )
-    print(curr_df.tail(1))
     
     for column in curr_df.columns:
         if column == 'timestamp':
@@ -83,8 +50,6 @@ def encode_transform_scale(curr_df:pd.DataFrame, inputs: pd.DataFrame):
             curr_df[column] = label.fit_transform(curr_df[column])
             mapping[column] = dict(zip(label.transform(label.classes_), label.classes_))
 
-    print("Encode", "="* 50 )
-    print(curr_df.tail(1))
 
     columns = list(curr_df.columns)
     label_columns = ['total travel delay']
@@ -108,15 +73,13 @@ def encode_transform_scale(curr_df:pd.DataFrame, inputs: pd.DataFrame):
         curr_df[col] = scaled_inputs_df[col].values
 
     scaled_inputs_df = curr_df[scaled_columns].rename(columns={col:col.replace('scl_','') for col in scaled_columns})
-    print("Scaled", "="* 50 )
-    print(curr_df.tail(1))
+    print(scaled_inputs_df.tail())
+    return curr_df, scaled_inputs_df, mapping, label_scaler
 
-    return curr_df, scaled_inputs_df, mapping
-
-@st.cache
-def load_model():
-    model = load_model('./finals_streamlit/models/cnn_regression_base_lr0_0001epoch50drop02-F183')
-    print(f"[+] {model.summary()}")
+# st.cache_resource
+def load_pretrained_model():
+    model: Model  = load_model('./models/cnn_regression_base_lr0_0001epoch50drop02-F183')
+    # print(f"[+] Model Summary: {model.summary()}")
     return model
 
 df: pd.DataFrame = load_pandas()
@@ -149,7 +112,8 @@ payload:Dict = {}
 
 # Month Day Year
 departure_date = st.date_input(label="Departure Date",
-                               help="Date of Departure"
+                               help="Date of Departure",
+                               min_value=datetime.datetime(2023,12,30)
                                )
 
 payload['month']= int(departure_date.month)
@@ -161,9 +125,22 @@ payload['hour']= int(scheduled_departure_time.hour)
 payload['scheduled departure time'] = int((scheduled_departure_time.hour*100) + (scheduled_departure_time.minute *10))
 
 # departure time
-departure_time = st.time_input(label="Time Departed", help="Actual time the plane departed")
+departure_time = st.time_input(
+    label="Time Departed", 
+    help="Actual time the plane departed",
+    value=payload['scheduled departure time'] 
+    )
 payload['departure time'] = int((departure_time.hour*100) + (departure_time.minute *10))
 payload['departure delay'] = payload['departure time'] - payload['scheduled departure time']
+
+# scheduled departure time
+scheduled_arrival_time = st.time_input(
+    label="Scheduled Arrival Time", 
+    help="The Scheduled Arrival time for the destination or connecting Airport",
+    value=departure_time
+    )
+
+payload['scheduled arrival time'] = int((scheduled_arrival_time.hour*100) + (scheduled_arrival_time.minute *10))
 
 # Dropdown 
 origin = st.selectbox(
@@ -228,15 +205,10 @@ payload['municipality'] = municipality
 payload['destination'] = destination
 payload['elevation'] = elevation
 
-# scheduled departure time
-scheduled_arrival_time = st.time_input(label="Arrival Time", help="The Scheduled Arrival time for the destination or connecting Airport")
-payload['scheduled arrival time'] = int((scheduled_arrival_time.hour*100) + (scheduled_arrival_time.minute *10))
-
 # distance = origin + distination, eta
 flight_path = df[['origin', 'destination', 'distance', 'eta duration']].set_index(keys=['destination', 'origin'])
 payload['distance'] = flight_path.loc[destination, origin]['distance'].mean()
 payload['eta duration'] = flight_path.loc[destination, origin]['eta duration'].mean()
-
 
 st.write("""
     ## Weather Forecast
@@ -310,16 +282,116 @@ st.write("""
     """     
 )
 
+left_column, right_column = st.columns(2)
 
-if st.button("Predict",  type="primary"):
-    # print(payload)
-    payload['total travel delay'] = 0
+if left_column.button("Your Flight Prediction", type="primary"):  
+    model = load_pretrained_model()
+    # payload['total travel delay'] = 0
+    # test_predict = pd.DataFrame([payload])
     test_predict = pd.DataFrame([payload])
-    df, scaled_df, mapping = encode_transform_scale(df, test_predict)
-    print(f"[+] Inserted {len(df)}")
-    print(df.tail(2))
-    print(scaled_df.tail(2))
+    df, scaled_df, mapping, label_scaler = encode_transform_scale(df, test_predict)
+    data = scaled_df.tail(24)
+    targets = data[['total travel delay']][23:]
+    # print(f"[+] targets {targets}")
+    data = data.drop(columns=['total travel delay'])
+
+    test_predict = tf.keras.utils.timeseries_dataset_from_array(
+        data=data, 
+        targets=targets, 
+        sequence_length=24,
+        sequence_stride=1,
+        sampling_rate=1,
+        shuffle=False,
+        batch_size=1)
+
+    ypred = model.predict(test_predict)
+    ypred = ypred.reshape(ypred.shape[0], 1)
+    predicted = label_scaler.inverse_transform(ypred)
+
+    delay = predicted.reshape(-1)[0]
+    text_delay = ""
+    if delay < 0:
+        text_delay = f"Will arrive early by {delay}"
+    else:
+        text_delay = f"WIll arrive late in destination airport by {delay}"
+
+    st.write(text_delay)
+
+if right_column.button("Test Data Predict"):
+    test_payload = [{'month': 9,
+        'day': 16,
+        'hour': 20,
+        'origin': 'JFK',
+        'scheduled departure time': 2001,
+        'departure time': 2134.0,
+        'departure delay': 93.0,
+        'distance': 1826,
+        'destination': 'ABQ',
+        'scheduled arrival time': 2248,
+        'eta duration': 247,
+        'humidity': 62.0,
+        'pressure': 833.0,
+        'temperature': 296.014,
+        'weather description': 'sky is clear',
+        'wind direction': 208.0,
+        'wind speed': 1.0,
+        'name': 'JetBlue Airways',
+        'carrier': 'B6',
+        'flight': 65,
+        'airport': 'Albuquerque International Sunport',
+        'municipality': 'Albuquerque',
+        'elevation': 5355.0,
+        'total travel delay': 157.0},
+        {'month': 9,
+        'day': 29,
+        'hour': 20,
+        'origin': 'JFK',
+        'scheduled departure time': 2001,
+        'departure time': 2114.0,
+        'departure delay': 73.0,
+        'distance': 1826,
+        'destination': 'ABQ',
+        'scheduled arrival time': 2248,
+        'eta duration': 247,
+        'humidity': 19.0,
+        'pressure': 835.0,
+        'temperature': 294.945,
+        'weather description': 'sky is clear',
+        'wind direction': 277.0,
+        'wind speed': 1.0,
+        'name': 'JetBlue Airways',
+        'carrier': 'B6',
+        'flight': 65,
+        'airport': 'Albuquerque International Sunport',
+        'municipality': 'Albuquerque',
+        'elevation': 5355.0,
+        'total travel delay': 118.0}]
     
+    st.write(test_payload)
+    model = load_pretrained_model()
+
+    test_predict = pd.DataFrame(test_payload)
+    df, scaled_df, mapping, label_scaler = encode_transform_scale(df, test_predict)
+    data = scaled_df.tail(24)
+    targets = data[['total travel delay']][23:]
+    # print(f"[+] targets {targets}")
+    data = data.drop(columns=['total travel delay'])
+
+    test_predict = tf.keras.utils.timeseries_dataset_from_array(
+        data=data, 
+        targets=targets, 
+        sequence_length=24,
+        sequence_stride=1,
+        sampling_rate=1,
+        shuffle=False,
+        batch_size=1)
+
+    ypred = model.predict(test_predict)
+    ypred = ypred.reshape(ypred.shape[0], 1)
+    predicted = label_scaler.inverse_transform(ypred)
+        
+    st.write(predicted)
+
 
 st.divider()
 st.write("""
