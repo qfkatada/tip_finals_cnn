@@ -1,9 +1,16 @@
 import datetime
 import decimal
+import json
 from typing import Dict
+from sklearn.calibration import LabelEncoder
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+inputs_scaler = StandardScaler()
+label_scaler = StandardScaler()
+label = LabelEncoder()
 
 # @st.cache_data #(allow_output_mutation=True)
 def load_pandas():
@@ -25,9 +32,86 @@ def load_pandas():
     
     return weather_details_flights_airport_codes[new_forcasted_flight + ['total travel delay']]
 
+# @st.cache_data
+def encode_transform(inputs: dict):
+    # From Notebook label transformer mapping
+    with open('./datasets/label_encoded.json', 'r') as json_file:
+        # label_encoded
+        mapping = json.load(json_file)
+        # print(mapping)
+
+    encoded_map = mapping
+    for key, transform_mapping in encoded_map.items():
+        encoded_map[key] = { val:int(k) for k, val in transform_mapping.items()}
+
+    # encoded to label
+    for key, val in inputs.items():
+        if key in encoded_map.keys():
+            inputs[key] = encoded_map[key][str(val)]
+
+    inputs = pd.DataFrame([inputs])[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
+                   'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
+                   'name', 'carrier', 'flight','airport','municipality', 'elevation']]
+
+    df[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
+                   'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
+                   'name', 'carrier', 'flight','airport','municipality', 'elevation']]
+    
+    scaled_columns = list([ f"scl_{str(col)}" for col in inputs.columns])
+    _inputs_reg_av_ds_scaled = inputs_scaler.fit_transform(inputs)
+    inputs = pd.DataFrame(_inputs_reg_av_ds_scaled, columns=scaled_columns)
+
+    return inputs, mapping
+
 @st.cache_data
-def scale(inputs: pd.DataFrame, labels: pd.DataFrame):
-    pass
+def encode_transform_scale(curr_df:pd.DataFrame, inputs: pd.DataFrame):
+    mapping = dict()
+
+    # insert user input to end of all inputs
+    curr_df = pd.concat([curr_df[['month', 'day', 'hour','origin','scheduled departure time','departure time', 'departure delay', 'distance','destination','scheduled arrival time', 'eta duration',
+                'humidity', 'pressure', 'temperature', 'weather description', 'wind direction', 'wind speed',
+                'name', 'carrier', 'flight','airport','municipality', 'elevation', 'total travel delay']], inputs])
+    
+    print("Original", "="* 50 )
+    print(curr_df.tail(1))
+    
+    for column in curr_df.columns:
+        if column == 'timestamp':
+            curr_df[column] = pd.to_datetime(curr_df[column])
+
+        if curr_df[column].dtype == 'object':
+            curr_df[column] = label.fit_transform(curr_df[column])
+            mapping[column] = dict(zip(label.transform(label.classes_), label.classes_))
+
+    print("Encode", "="* 50 )
+    print(curr_df.tail(1))
+
+    columns = list(curr_df.columns)
+    label_columns = ['total travel delay']
+    input_columns = list(curr_df.drop(columns=label_columns).columns)
+
+    scaled_columns = list([ f"scl_{str(col)}" for col in columns])
+    scaled_inputs = list([ f"scl_{str(col)}" for col in input_columns])
+    scaled_labels = list([ f"scl_{str(col)}" for col in label_columns])
+
+    _label_btc_mulv_scaled = label_scaler.fit_transform(curr_df[label_columns])
+    _label_btc_mulv = pd.DataFrame(_label_btc_mulv_scaled, columns=scaled_labels)
+
+    _inputs_reg_av_ds_scaled = inputs_scaler.fit_transform(curr_df[input_columns])
+    _reg_av_ds_scaled = pd.DataFrame(_inputs_reg_av_ds_scaled, columns=scaled_inputs)
+
+    scaled_inputs_df = pd.concat([_reg_av_ds_scaled,
+            _label_btc_mulv],
+            axis=1)
+
+    for col in scaled_columns:
+        curr_df[col] = scaled_inputs_df[col].values
+
+    scaled_inputs_df = curr_df[scaled_columns].rename(columns={col:col.replace('scl_','') for col in scaled_columns})
+    print("Scaled", "="* 50 )
+    print(curr_df.tail(1))
+
+    return curr_df, scaled_inputs_df, mapping
 
 @st.cache
 def load_model():
@@ -36,6 +120,8 @@ def load_model():
     return model
 
 df: pd.DataFrame = load_pandas()
+print(f"[+] Initial {len(df)}")
+
 st.markdown("# TIP Finals: Model Deployment")
 
 st.write("""
@@ -48,8 +134,6 @@ st.write("""
     ## Travel Plan
     """     
 )
-
-# st.sidebar.markdown("# Main page 🎈")
 
 # Checkbox
 if st.checkbox('Show dataframe'):
@@ -81,9 +165,7 @@ departure_time = st.time_input(label="Time Departed", help="Actual time the plan
 payload['departure time'] = int((departure_time.hour*100) + (departure_time.minute *10))
 payload['departure delay'] = payload['departure time'] - payload['scheduled departure time']
 
-# distance = origin + distination
-
-# Dropdown
+# Dropdown 
 origin = st.selectbox(
     key=1,
     label='Airport Origin',
@@ -141,31 +223,28 @@ elevation = airport_destination_bucket.loc[airport, 'elevation']
 'Municipality: ', municipality, destination
 'Elevation: ',  elevation
 
+payload['airport'] = airport
 payload['municipality'] = municipality
 payload['destination'] = destination
 payload['elevation'] = elevation
 
 # scheduled departure time
 scheduled_arrival_time = st.time_input(label="Arrival Time", help="The Scheduled Arrival time for the destination or connecting Airport")
-payload['scheduled arrival time'] = scheduled_arrival_time
+payload['scheduled arrival time'] = int((scheduled_arrival_time.hour*100) + (scheduled_arrival_time.minute *10))
 
-# Default Values
-described_values = df[['humidity','pressure', 'temperature', 'wind direction', 'wind speed', 'distance', 'eta duration']].describe()
+# distance = origin + distination, eta
+flight_path = df[['origin', 'destination', 'distance', 'eta duration']].set_index(keys=['destination', 'origin'])
+payload['distance'] = flight_path.loc[destination, origin]['distance'].mean()
+payload['eta duration'] = flight_path.loc[destination, origin]['eta duration'].mean()
 
-eta_duration = st.number_input(
-    label="Estimated Flight Dration", 
-    # min_value=described_values.loc['min','eta duration'], 
-    min_value=0.00, 
-    max_value=described_values.loc['max', 'eta duration'],
-    value=described_values.loc['mean', 'eta duration'],
-    help="ETA Flight Duration from the ticket")
-
-payload['eta duration'] = eta_duration
 
 st.write("""
     ## Weather Forecast
     """     
 )
+
+# Weather Forecast Described Values
+described_values = df[['humidity','pressure', 'temperature', 'wind direction', 'wind speed']].describe()
 
 humidity = st.slider(
     key=6,
@@ -233,47 +312,14 @@ st.write("""
 
 
 if st.button("Predict",  type="primary"):
-    _payload:Dict = {
-        'month': departure_date.month,
-        'day': departure_date.day,
-        'hour': departure_time.hour,
-        'origin': origin,
-        'scheduled departure time': float(scheduled_departure_time.hour + (scheduled_departure_time.minute *100)),
-        'departure time': 517.0,
-        'departure delay': 2.0,
-        'distance': 1400,
-        'destination': 'IAH',
-        'scheduled arrival time': 819,
-        'eta duration': 304,
-        'humidity': 81.0,
-        'pressure': 1025.0,
-        'temperature': 281.49,
-        'weather description': 'broken clouds',
-        'wind direction': 90.0,
-        'wind speed': 4.0,
-        'name': 'United Air Lines Inc.',
-        'carrier': 'UA',
-        'flight': 1545,
-        'airport': 'George Bush Intercontinental Houston Airport',
-        'municipality': 'Houston',
-        'elevation': 97.0,
-        # 'total travel delay': 13.0
-    }
-
-    _orig = list(_payload.keys())
-    _proc = list(payload.keys())
-
-    print("-"* 100)
-    print(f"[+] original {len(_orig)}: {_orig}")
-    print(f"[+] payload {len(_proc)}: {_proc}")
-    print("-"* 100)
-
-    for k in list(payload.keys()):
-        if k in _orig:
-           continue
-        else:
-            print(k)
-    # print(f"[+] {payload}")
+    # print(payload)
+    payload['total travel delay'] = 0
+    test_predict = pd.DataFrame([payload])
+    df, scaled_df, mapping = encode_transform_scale(df, test_predict)
+    print(f"[+] Inserted {len(df)}")
+    print(df.tail(2))
+    print(scaled_df.tail(2))
+    
 
 st.divider()
 st.write("""
